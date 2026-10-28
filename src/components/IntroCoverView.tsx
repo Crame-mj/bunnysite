@@ -18,6 +18,7 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
   const startXRef = useRef<number>(0);
   const currentDragRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const touchInfoRef = useRef<{ startX: number; startY: number; isHorizontal: boolean; locked: boolean } | null>(null);
 
   // Complete opening animation
   const triggerOpen = useCallback(() => {
@@ -33,14 +34,80 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
   }, [isOpening, onOpenComplete]);
 
   // Touch and mouse drag handlers
-  const handleStart = (clientX: number) => {
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (isOpening) return;
+    if (e.touches.length > 0) {
+      touchInfoRef.current = {
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+        isHorizontal: false,
+        locked: false,
+      };
+      currentDragRef.current = dragProgress;
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
     if (isOpening) return;
     setIsDragging(true);
-    startXRef.current = clientX;
+    startXRef.current = e.clientX;
     currentDragRef.current = dragProgress;
   };
 
-  const handleMove = useCallback((clientX: number) => {
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    if (!touchInfoRef.current || isOpening || e.touches.length === 0) return;
+    const touch = e.touches[0];
+    const dx = touchInfoRef.current.startX - touch.clientX; // dragging leftwards opens
+    const dy = touch.clientY - touchInfoRef.current.startY;
+
+    if (!touchInfoRef.current.locked) {
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      if (absDx < 10 && absDy < 10) return;
+
+      if (absDy >= absDx) {
+        // Vertical scroll: ignore cover drag
+        touchInfoRef.current = null;
+        return;
+      } else if (absDx > absDy * 1.3 && absDx >= 18) {
+        touchInfoRef.current.locked = true;
+        touchInfoRef.current.isHorizontal = true;
+        setIsDragging(true);
+        startXRef.current = touchInfoRef.current.startX;
+      } else {
+        return;
+      }
+    }
+
+    if (touchInfoRef.current?.isHorizontal) {
+      if (e.cancelable) e.preventDefault();
+      const delta = startXRef.current - touch.clientX;
+      const maxDistance = 260;
+      const progress = Math.min(1, Math.max(0, currentDragRef.current + delta / maxDistance));
+      setDragProgress(progress);
+
+      if (progress >= 0.85) {
+        touchInfoRef.current = null;
+        setIsDragging(false);
+        triggerOpen();
+      }
+    }
+  }, [isOpening, triggerOpen]);
+
+  const handleTouchEnd = useCallback(() => {
+    const isHorizontal = touchInfoRef.current?.isHorizontal;
+    touchInfoRef.current = null;
+    if (!isHorizontal) return;
+
+    setIsDragging(false);
+    if (dragProgress > 0.4) {
+      triggerOpen();
+    } else {
+      setDragProgress(0);
+    }
+  }, [dragProgress, triggerOpen]);
+
+  const handleMouseMove = useCallback((clientX: number) => {
     if (!isDragging || isOpening) return;
     const delta = startXRef.current - clientX; // dragging leftwards opens
     const maxDistance = 260; // drag distance in px to open
@@ -53,7 +120,7 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
     }
   }, [isDragging, isOpening, triggerOpen]);
 
-  const handleEnd = useCallback(() => {
+  const handleMouseUp = useCallback(() => {
     if (!isDragging || isOpening) return;
     setIsDragging(false);
     if (dragProgress > 0.4) {
@@ -66,27 +133,23 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
 
   // Global mouse/touch up listener
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => handleMove(e.clientX);
-    const onMouseUp = () => handleEnd();
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length > 0) handleMove(e.touches[0].clientX);
-    };
-    const onTouchEnd = () => handleEnd();
+    const onMouseMove = (e: MouseEvent) => handleMouseMove(e.clientX);
+    const onMouseUp = () => handleMouseUp();
 
-    if (isDragging) {
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-      window.addEventListener('touchmove', onTouchMove);
-      window.addEventListener('touchend', onTouchEnd);
-    }
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd);
+    window.addEventListener('touchcancel', handleTouchEnd);
 
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('touchcancel', handleTouchEnd);
     };
-  }, [isDragging, handleMove, handleEnd]);
+  }, [handleMouseMove, handleMouseUp, handleTouchMove, handleTouchEnd]);
 
   // Cover 3D rotation angle: 0deg (closed) to -175deg (fully open to left)
   const coverRotateY = -dragProgress * 170;
@@ -150,10 +213,8 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
           {/* 3D Menu Book Wrapper */}
           <div
             className="relative w-[300px] sm:w-[350px] md:w-[390px] h-[430px] sm:h-[490px] md:h-[540px] cursor-grab active:cursor-grabbing touch-none select-none transition-transform duration-300 hover:scale-[1.01]"
-            onMouseDown={(e) => handleStart(e.clientX)}
-            onTouchStart={(e) => {
-              if (e.touches.length > 0) handleStart(e.touches[0].clientX);
-            }}
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleTouchStart}
           >
             {/* Menu Interior Base (Revealed as cover opens) */}
             <div className="absolute inset-0 rounded-r-lg rounded-l-sm bg-[#16161a] border border-neutral-800 shadow-2xl p-6 flex flex-col justify-between overflow-hidden">
@@ -287,7 +348,7 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
           © 2026 BUNNY CAFE PROJECT. All Rights Reserved.
         </div>
         <div className="flex items-center gap-4 mt-2 sm:mt-0 text-neutral-400">
-          <span>합법 인가 유흥주점</span>
+          <span>합법 정식 인가 유흥주점 (성행위 엄격 금지)</span>
           <span>·</span>
           <span>프라이빗 룸 완비</span>
           <span>·</span>
