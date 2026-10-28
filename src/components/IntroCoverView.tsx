@@ -287,7 +287,7 @@ export const IntroCoverView: React.FC<IntroCoverViewProps> = ({
           © 2026 BUNNY CAFE PROJECT. All Rights Reserved.
         </div>
         <div className="flex items-center gap-4 mt-2 sm:mt-0 text-neutral-400">
-          <span>합법 정식 인가 유흥주점 (성행위 엄격 금지)</span>
+          <span>합법 인가 유흥주점</span>
           <span>·</span>
           <span>프라이빗 룸 완비</span>
           <span>·</span>
