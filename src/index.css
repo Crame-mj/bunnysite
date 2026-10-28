@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #0d0d0f;
+    color: #e4e4e7;
+    font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  img {
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+.font-serif-kr {
+  font-family: 'Noto Serif KR', 'Cinzel', Georgia, serif;
+}
+
+.font-cinzel {
+  font-family: 'Cinzel', 'Noto Serif KR', serif;
+}
+
+/* Custom 3D Book Perspective and Shadows */
+.perspective-1500 {
+  perspective: 1500px;
+}
+
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.book-shadow {
+  box-shadow: 
+    -15px 20px 45px rgba(0, 0, 0, 0.85),
+    0 10px 30px rgba(0, 0, 0, 0.7),
+    inset 0 0 40px rgba(0, 0, 0, 0.4);
+}
+
+.book-spine-shadow {
+  box-shadow: inset 16px 0 24px -10px rgba(0, 0, 0, 0.7);
+}
+
+.book-spine-shadow-right {
+  box-shadow: inset -16px 0 24px -10px rgba(0, 0, 0, 0.7);
+}
+
+/* Subtle parchment paper texture background */
+.bg-parchment {
+  background-color: #141418;
+}
+
+/* Custom scrollbar for menu content if needed */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(20, 20, 24, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}

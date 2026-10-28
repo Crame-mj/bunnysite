@@ -1,0 +1,6 @@
+{
+  "name": "Bunny Cafe - Visual Novel Introduction",
+  "description": "현대 한국의 프라이빗 모던 바 'Bunny cafe'를 배경으로 한 비주얼 노벨 게임 공식 소개 웹사이트입니다. 인터랙티브 메뉴판을 펼치고 넘기며 세계관, 호스트, 프라이빗 룸 및 시스템을 확인하세요.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
