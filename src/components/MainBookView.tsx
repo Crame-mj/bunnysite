@@ -15,8 +15,26 @@ import {
   Volume1,
   VolumeX,
   Music,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
-import { GAME_INFO, HOSTS, MENU_ITEMS, GAME_SYSTEMS, HostProfile, MenuItem, HERA_PAGE_DETAIL, GLASS_PAGE_DETAIL, LILY_PAGE_DETAIL, CARROT_PAGE_DETAIL, LOKI_PAGE_DETAIL, INDIGO_PAGE_DETAIL, THOR_PAGE_DETAIL, RIO_PAGE_DETAIL } from '../data/gameData';
+import {
+  GAME_INFO,
+  HOSTS,
+  MENU_ITEMS,
+  GAME_SYSTEMS,
+  HostProfile,
+  MenuItem,
+  HostDetailProfile,
+  HERA_PAGE_DETAIL,
+  GLASS_PAGE_DETAIL,
+  LILY_PAGE_DETAIL,
+  CARROT_PAGE_DETAIL,
+  LOKI_PAGE_DETAIL,
+  INDIGO_PAGE_DETAIL,
+  THOR_PAGE_DETAIL,
+  RIO_PAGE_DETAIL,
+} from '../data/gameData';
 import backgroundImage from '../assets/images/background.png';
 import mapImage from '../assets/images/map.png';
 import recommendImage from '../assets/images/recommendf.png';
@@ -62,6 +80,51 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
   const dragStartXRef = useRef<number>(0);
   const animFrameRef = useRef<number | null>(null);
   const bookContainerRef = useRef<HTMLDivElement>(null);
+
+  // Virtual canvas base design dimensions (strict proportional aspect ratio)
+  const BASE_WIDTH = 1000;
+  const BASE_HEIGHT = 650;
+
+  // Responsive scale & zoom states
+  const [scale, setScale] = useState<number>(1);
+  const [zoomMode, setZoomMode] = useState<'fit' | 'full'>('fit');
+  const lastTapRef = useRef<number>(0);
+
+  // Auto-calculate fit scale based on viewport width
+  useEffect(() => {
+    const updateScale = () => {
+      const availWidth = Math.min(window.innerWidth - 16, 1280);
+      const fit = availWidth / BASE_WIDTH;
+      setScale(Math.min(1.15, Math.max(0.32, fit)));
+    };
+
+    updateScale();
+    window.addEventListener('resize', updateScale);
+    return () => window.removeEventListener('resize', updateScale);
+  }, []);
+
+  const activeScale = zoomMode === 'full' ? 1.0 : scale;
+
+  const handleDoubleTap = () => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 320) {
+      setZoomMode((z) => (z === 'fit' ? 'full' : 'fit'));
+    }
+    lastTapRef.current = now;
+  };
+
+  // Touch and mouse gesture disambiguation refs
+  const touchGestureRef = useRef<{
+    startX: number;
+    startY: number;
+    isHorizontal: boolean;
+    locked: boolean;
+  } | null>(null);
+  const mouseGestureRef = useRef<{
+    startX: number;
+    startY: number;
+    isDown: boolean;
+  } | null>(null);
 
   // Sub-component states
   const [selectedHost, setSelectedHost] = useState<HostProfile>(HOSTS[0]);
@@ -231,41 +294,101 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleNextPage, handlePrevPage]);
 
-  // Interactive Drag & Drop page flipping
-  const handleDragStart = (clientX: number) => {
+  // Interactive Drag & Drop page flipping with vertical scroll isolation
+  const handleTouchStart = (e: React.TouchEvent) => {
     if (isFlipping) return;
-    setIsDragging(true);
-    dragStartXRef.current = clientX;
+    const target = e.target as HTMLElement;
+    // Don't initiate book flip when tapping buttons, inputs, audio controls, or links
+    if (target.closest('button, a, input, [role="button"], audio')) return;
+
+    if (e.touches.length > 0) {
+      touchGestureRef.current = {
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+        isHorizontal: false,
+        locked: false,
+      };
+    }
   };
 
-  const handleDragMove = useCallback((clientX: number) => {
-    if (!isDragging || isFlipping) return;
-    const delta = clientX - dragStartXRef.current;
-    const maxDragDistance = 340; // px to reach 180deg flip
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isFlipping) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, [role="button"], audio')) return;
 
-    if (delta < 0) {
-      // Dragging left (turning forward to next page)
-      if (currentSpread < totalSpreads - 1) {
-        const progress = Math.max(-1, delta / maxDragDistance);
-        setFlipProgress(progress);
-        flipProgressRef.current = progress;
-      }
-    } else if (delta > 0) {
-      // Dragging right (turning backward to prev page)
-      if (currentSpread > 0) {
-        const progress = Math.min(1, delta / maxDragDistance);
-        setFlipProgress(progress);
-        flipProgressRef.current = progress;
+    mouseGestureRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      isDown: true,
+    };
+  };
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    if (isFlipping || !touchGestureRef.current || e.touches.length === 0) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchGestureRef.current.startX;
+    const dy = touch.clientY - touchGestureRef.current.startY;
+
+    // Determine gesture direction intent if not locked yet
+    if (!touchGestureRef.current.locked) {
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+
+      // Jitter dampening: wait until finger moves at least 10px
+      if (absDx < 10 && absDy < 10) return;
+
+      if (absDy >= absDx) {
+        // User is scrolling vertically through page contents!
+        // Lock out horizontal drag entirely for this touch gesture
+        touchGestureRef.current = null;
+        return;
+      } else if (absDx > absDy * 1.3 && absDx >= 20) {
+        // Clear horizontal drag intended
+        touchGestureRef.current.locked = true;
+        touchGestureRef.current.isHorizontal = true;
+        setIsDragging(true);
+        dragStartXRef.current = touchGestureRef.current.startX;
+      } else {
+        return;
       }
     }
-  }, [isDragging, isFlipping, currentSpread, totalSpreads]);
 
-  const handleDragEnd = useCallback(() => {
-    if (!isDragging) return;
+    if (touchGestureRef.current?.isHorizontal) {
+      if (e.cancelable) e.preventDefault(); // Prevent accidental vertical wobble during horizontal drag
+      const maxDragDistance = 260 * Math.max(0.45, activeScale); // Distance needed to reach 100% flip progress
+      const delta = touch.clientX - dragStartXRef.current;
+
+      if (delta < 0) {
+        // Dragging left (turning forward to next page)
+        if (currentSpread < totalSpreads - 1) {
+          const progress = Math.max(-1, delta / maxDragDistance);
+          setFlipProgress(progress);
+          flipProgressRef.current = progress;
+        }
+      } else if (delta > 0) {
+        // Dragging right (turning backward to prev page)
+        if (currentSpread > 0) {
+          const progress = Math.min(1, delta / maxDragDistance);
+          setFlipProgress(progress);
+          flipProgressRef.current = progress;
+        }
+      }
+    }
+  }, [isFlipping, currentSpread, totalSpreads, activeScale]);
+
+  const handleTouchEnd = useCallback(() => {
+    const isHorizontal = touchGestureRef.current?.isHorizontal;
+    touchGestureRef.current = null;
+
+    if (!isHorizontal) {
+      // Just a tap or vertical scroll: do not trigger any page turn
+      return;
+    }
+
     setIsDragging(false);
-
     const progress = flipProgressRef.current;
-    const threshold = 0.28; // flip threshold
+    // Strict threshold: User must drag deliberately by at least 40%
+    const threshold = 0.40;
 
     if (progress < -threshold && currentSpread < totalSpreads - 1) {
       // Complete turn to next page
@@ -282,32 +405,79 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
         flipProgressRef.current = 0;
       });
     } else {
-      // Cancel and spring back to 0
+      // Not dragged far enough: spring back cleanly
+      animateFlipTo(0);
+    }
+  }, [currentSpread, totalSpreads, animateFlipTo]);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (isFlipping || !mouseGestureRef.current?.isDown) return;
+    const dx = e.clientX - mouseGestureRef.current.startX;
+    const dy = e.clientY - mouseGestureRef.current.startY;
+
+    if (!isDragging) {
+      if (Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy)) {
+        setIsDragging(true);
+        dragStartXRef.current = mouseGestureRef.current.startX;
+      } else {
+        return;
+      }
+    }
+
+    const delta = e.clientX - dragStartXRef.current;
+    const maxDragDistance = 320;
+    if (delta < 0 && currentSpread < totalSpreads - 1) {
+      const progress = Math.max(-1, delta / maxDragDistance);
+      setFlipProgress(progress);
+      flipProgressRef.current = progress;
+    } else if (delta > 0 && currentSpread > 0) {
+      const progress = Math.min(1, delta / maxDragDistance);
+      setFlipProgress(progress);
+      flipProgressRef.current = progress;
+    }
+  }, [isFlipping, isDragging, currentSpread, totalSpreads]);
+
+  const handleMouseUp = useCallback(() => {
+    if (!mouseGestureRef.current?.isDown) return;
+    mouseGestureRef.current = null;
+    if (!isDragging) return;
+    setIsDragging(false);
+
+    const progress = flipProgressRef.current;
+    const threshold = 0.38;
+
+    if (progress < -threshold && currentSpread < totalSpreads - 1) {
+      animateFlipTo(-1, () => {
+        setCurrentSpread((s) => s + 1);
+        setFlipProgress(0);
+        flipProgressRef.current = 0;
+      });
+    } else if (progress > threshold && currentSpread > 0) {
+      animateFlipTo(1, () => {
+        setCurrentSpread((s) => s - 1);
+        setFlipProgress(0);
+        flipProgressRef.current = 0;
+      });
+    } else {
       animateFlipTo(0);
     }
   }, [isDragging, currentSpread, totalSpreads, animateFlipTo]);
 
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => handleDragMove(e.clientX);
-    const onMouseUp = () => handleDragEnd();
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length > 0) handleDragMove(e.touches[0].clientX);
-    };
-    const onTouchEnd = () => handleDragEnd();
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd);
+    window.addEventListener('touchcancel', handleTouchEnd);
 
-    if (isDragging) {
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-      window.addEventListener('touchmove', onTouchMove);
-      window.addEventListener('touchend', onTouchEnd);
-    }
     return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('touchcancel', handleTouchEnd);
     };
-  }, [isDragging, handleDragMove, handleDragEnd]);
+  }, [handleMouseMove, handleMouseUp, handleTouchMove, handleTouchEnd]);
 
   const handlePlayVoice = () => {
     setVoiceLinePlaying(true);
@@ -330,22 +500,91 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     setIsSubmitted(true);
   };
 
+  // Reusable Host Detail Page Renderer (Fixed Proportions, Non-overlapping Layout)
+  const renderHostDetailPage = (detail: HostDetailProfile, img: string) => {
+    return (
+      <div className="h-full flex flex-col justify-between space-y-2 select-none">
+        {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
+        <div className="flex items-baseline gap-2 shrink-0">
+          <h3 className="text-2xl font-serif-kr font-bold text-neutral-100 tracking-wide">
+            {detail.nickname}
+          </h3>
+          <span className="text-xs font-serif-kr text-neutral-400/80">
+            {detail.realName}
+          </span>
+        </div>
+
+        {/* Side-by-side Section: Image & 12 Body Specs Table (Strictly 2 Columns, unified height) */}
+        <div className="grid grid-cols-2 gap-3 items-stretch flex-1 min-h-0">
+          {/* Left: Host Image */}
+          <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
+            <img
+              src={img}
+              alt={`${detail.nickname} (${detail.realName})`}
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+              className="w-full h-full object-cover select-none pointer-events-none"
+            />
+          </div>
+
+          {/* Right: 12 Body Specs Table (12 rows, zero overflow) */}
+          <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 h-full flex flex-col justify-between min-h-0 overflow-hidden">
+            <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
+              {detail.bodySpecs.map((spec, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between text-xs flex-1 py-0.5"
+                >
+                  <span className="text-neutral-400">{spec.label}</span>
+                  <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 (Strictly 2 Columns) */}
+        <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 shrink-0">
+          <div className="grid grid-cols-2 gap-x-3.5 gap-y-1.5 text-xs font-serif-kr">
+            {detail.profileDetails.map((item, idx) => (
+              <div key={idx} className="flex items-start gap-1.5">
+                <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[54px]">
+                  {item.label}
+                </span>
+                <span className="text-neutral-200 leading-snug break-keep text-[11.5px]">
+                  {item.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Bottom Center: Host Quote */}
+        <div className="pt-1.5 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
+          <p className="text-sm font-serif-kr text-neutral-200 italic tracking-wide">
+            {detail.quote}
+          </p>
+        </div>
+      </div>
+    );
+  };
+
   // Render left page content for a given spread
   const renderLeftPageContent = (spreadIdx: number) => {
     if (spreadIdx === 0) {
       return (
-        <div className="space-y-4">
-          <h2 className="text-2xl sm:text-3xl font-serif-kr font-semibold text-neutral-100 tracking-tight leading-snug">
+        <div className="space-y-2.5 sm:space-y-4">
+          <h2 className="text-sm sm:text-2xl md:text-3xl font-serif-kr font-semibold text-neutral-100 tracking-tight leading-snug">
             도심 속 숨겨진 프라이빗 모던 라운지, 'Bunny cafe'
           </h2>
-          <div className="w-12 h-0.5 bg-neutral-700" />
+          <div className="w-8 sm:w-12 h-0.5 bg-neutral-700" />
 
-          <p className="text-sm font-serif-kr text-neutral-300 leading-relaxed whitespace-pre-line pt-1">
+          <p className="text-[11px] sm:text-sm font-serif-kr text-neutral-300 leading-relaxed whitespace-pre-line pt-0.5 sm:pt-1">
             {GAME_INFO.synopsis}
           </p>
 
-          <div className="p-4 bg-neutral-900 border border-neutral-800 rounded-lg mt-4">
-            <p className="text-xs font-serif-kr italic text-neutral-300 leading-relaxed">
+          <div className="p-2.5 sm:p-4 bg-neutral-900 border border-neutral-800 rounded-lg mt-2 sm:mt-4">
+            <p className="text-[10px] sm:text-xs font-serif-kr italic text-neutral-300 leading-relaxed">
               "지친 하루의 끝, 무거운 문을 열면 감미로운 음악과 은은한 에스프레소 향, 그리고 위스키 잔을 닦는
               바니 호스트의 미소가 당신을 맞이합니다."
             </p>
@@ -356,23 +595,23 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     if (spreadIdx === 1) {
       // Page 03: 식사 메뉴 (Part 1 - 셰프 스페셜 다이닝)
       return (
-        <div className="h-full flex flex-col justify-between space-y-4">
+        <div className="h-full flex flex-col justify-between space-y-2 sm:space-y-4">
           <div>
-            <span className="text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
+            <span className="text-[10px] sm:text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
               CHEF'S SPECIAL DINING
             </span>
-            <h3 className="text-xl sm:text-2xl font-serif-kr font-semibold text-neutral-100 mt-1">
+            <h3 className="text-sm sm:text-xl md:text-2xl font-serif-kr font-semibold text-neutral-100 mt-0.5 sm:mt-1">
               셰프 추천 시그니처 플레이트
             </h3>
           </div>
 
-          <div className="flex-1 flex items-center justify-center py-4 select-none">
+          <div className="flex-1 flex items-center justify-center py-2 sm:py-4 select-none">
             <img
               src={recommendImage}
               alt="셰프 추천 시그니처 플레이트"
               draggable={false}
               onDragStart={(e) => e.preventDefault()}
-              className="w-full max-h-[380px] sm:max-h-[440px] object-contain select-none pointer-events-none drop-shadow-2xl"
+              className="w-full max-h-[220px] sm:max-h-[360px] md:max-h-[440px] object-contain select-none pointer-events-none drop-shadow-2xl"
             />
           </div>
         </div>
@@ -382,31 +621,31 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
       // Page 05: 식사 메뉴 (Part 2 - 크래프트 칵테일 & 주류)
       const cocktailItems = MENU_ITEMS.filter((item) => item.category === 'Cocktail');
       return (
-        <div className="space-y-4">
+        <div className="space-y-2.5 sm:space-y-4">
           <div>
-            <span className="text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
+            <span className="text-[10px] sm:text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
               Cocktails & Drinks
             </span>
-            <h3 className="text-xl sm:text-2xl font-serif-kr font-semibold text-neutral-100">
+            <h3 className="text-sm sm:text-xl md:text-2xl font-serif-kr font-semibold text-neutral-100">
               칵테일 & 주류
             </h3>
           </div>
 
-          <div className="space-y-2.5">
+          <div className="space-y-1.5 sm:space-y-2.5">
             {cocktailItems.map((item, idx) => (
               <div
                 key={idx}
-                className="p-3 rounded-lg border bg-neutral-900/60 border-neutral-800"
+                className="p-2 sm:p-3 rounded-lg border bg-neutral-900/60 border-neutral-800"
               >
-                <div className="flex justify-between items-baseline">
-                  <h4 className="font-serif-kr text-sm font-semibold text-neutral-100">{item.name}</h4>
-                  <span className="text-xs font-mono text-neutral-300 tabular-nums">{item.price}</span>
+                <div className="flex justify-between items-baseline gap-1">
+                  <h4 className="font-serif-kr text-xs sm:text-sm font-semibold text-neutral-100 truncate">{item.name}</h4>
+                  <span className="text-[10px] sm:text-xs font-mono text-neutral-300 tabular-nums shrink-0">{item.price}</span>
                 </div>
-                <div className="text-[11px] text-neutral-400 font-serif-kr mt-0.5">{item.subName}</div>
-                <p className="text-xs text-neutral-300 mt-1 font-serif-kr leading-relaxed line-clamp-2">
+                <div className="text-[10px] sm:text-[11px] text-neutral-400 font-serif-kr mt-0.5 truncate">{item.subName}</div>
+                <p className="text-[10px] sm:text-xs text-neutral-300 mt-1 font-serif-kr leading-relaxed line-clamp-2">
                   {item.description}
                 </p>
-                <div className="mt-1.5 text-[10px] text-neutral-400 flex items-center justify-between">
+                <div className="mt-1 text-[9px] sm:text-[10px] text-neutral-400 flex items-center justify-between">
                   <span>주의: {item.recommendedHost}</span>
                 </div>
               </div>
@@ -419,12 +658,12 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     if (spreadIdx === 3) {
       // Page 07: 호스트 메뉴 (이 달의 직원)
       return (
-        <div className="h-full flex flex-col justify-between space-y-4">
+        <div className="h-full flex flex-col justify-between space-y-2 sm:space-y-4">
           <div>
-            <span className="text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
+            <span className="text-[10px] sm:text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
               BEST HOST OF THE MONTH
             </span>
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-semibold text-neutral-100 mt-1">
+            <h3 className="text-sm sm:text-2xl md:text-3xl font-serif-kr font-semibold text-neutral-100 mt-0.5 sm:mt-1">
               이 달의 직원: 헤라
             </h3>
           </div>
@@ -436,7 +675,7 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
                 alt="이 달의 직원: 헤라"
                 draggable={false}
                 onDragStart={(e) => e.preventDefault()}
-                className="w-full max-h-[380px] sm:max-h-[440px] object-contain select-none pointer-events-none block"
+                className="w-full max-h-[220px] sm:max-h-[360px] md:max-h-[440px] object-contain select-none pointer-events-none block"
               />
             </div>
           </div>
@@ -445,275 +684,19 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     }
     if (spreadIdx === 4) {
       // Page 09: 호스트 헤라 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {HERA_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {HERA_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={sup00Img}
-                alt="헤라 (박수아)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {HERA_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {HERA_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {HERA_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(HERA_PAGE_DETAIL, sup00Img);
     }
     if (spreadIdx === 5) {
       // Page 11: 호스트 릴리 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {LILY_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {LILY_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={bap00Img}
-                alt="릴리 (배수정)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {LILY_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {LILY_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {LILY_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(LILY_PAGE_DETAIL, bap00Img);
     }
     if (spreadIdx === 6) {
       // Page 13: 호스트 로키 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {LOKI_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {LOKI_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={kip00Img}
-                alt="로키 (김현진)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {LOKI_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {LOKI_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {LOKI_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(LOKI_PAGE_DETAIL, kip00Img);
     }
     if (spreadIdx === 7) {
       // Page 15: 호스트 토르 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {THOR_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {THOR_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={nap00Img}
-                alt="토르 (남덕배)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {THOR_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {THOR_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {THOR_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(THOR_PAGE_DETAIL, nap00Img);
     }
     if (spreadIdx === 8) {
       // Page 17: 안내 사항 (이전 25페이지 내용 이전)
@@ -781,40 +764,40 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     if (spreadIdx === 0) {
       // Page 02: 카페 소개 운영원칙 & 오시는 길
       return (
-        <div className="space-y-4">
+        <div className="space-y-2.5 sm:space-y-4">
           {/* Rules / Guide */}
-          <div className="space-y-2.5">
-            <div className="p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
-              <div className="text-xs font-serif-kr font-bold text-neutral-100">
+          <div className="space-y-1.5 sm:space-y-2.5">
+            <div className="p-2 sm:p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
+              <div className="text-[11px] sm:text-xs font-serif-kr font-bold text-neutral-100">
                 1. 건전하고 합법적인 공간
               </div>
-              <p className="text-[11px] font-serif-kr text-neutral-300 mt-1 leading-relaxed">
+              <p className="text-[10px] sm:text-[11px] font-serif-kr text-neutral-300 mt-0.5 sm:mt-1 leading-relaxed">
                 버니 카페는 정식으로 허가 받은 유흥 음식점으로써, 안심할 수 있는 휴식처입니다.
               </p>
             </div>
 
-            <div className="p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
-              <div className="text-xs font-serif-kr font-bold text-neutral-100">
+            <div className="p-2 sm:p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
+              <div className="text-[11px] sm:text-xs font-serif-kr font-bold text-neutral-100">
                 2. 전 좌석 프라이빗 룸
               </div>
-              <p className="text-[11px] font-serif-kr text-neutral-300 mt-1 leading-relaxed">
+              <p className="text-[10px] sm:text-[11px] font-serif-kr text-neutral-300 mt-0.5 sm:mt-1 leading-relaxed">
                 버니 카페의 모든 테이블은 방음 파티션과 암막 커튼으로 분리되어 있어 타인에게 방해받지 않는 휴식을 보장합니다.
               </p>
             </div>
 
-            <div className="p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
-              <div className="text-xs font-serif-kr font-bold text-neutral-100">
+            <div className="p-2 sm:p-3 bg-neutral-900 border border-neutral-800 rounded-lg">
+              <div className="text-[11px] sm:text-xs font-serif-kr font-bold text-neutral-100">
                 3. 전문적인 직원들
               </div>
-              <p className="text-[11px] font-serif-kr text-neutral-300 mt-1 leading-relaxed">
+              <p className="text-[10px] sm:text-[11px] font-serif-kr text-neutral-300 mt-0.5 sm:mt-1 leading-relaxed">
                 버니 카페의 전문 주방 인력들은 항상 변치 않는 맛의 음식을 제공하며, 카페의 얼굴인 호스트들은 개성 넘치는 모습으로 즐거움을 채워줍니다.
               </p>
             </div>
           </div>
 
           {/* Location & Map Section */}
-          <div className="pt-1 space-y-2">
-            <h4 className="font-bold text-sm text-neutral-100 font-serif-kr">
+          <div className="pt-0.5 sm:pt-1 space-y-1.5 sm:space-y-2">
+            <h4 className="font-bold text-xs sm:text-sm text-neutral-100 font-serif-kr">
               오시는 길
             </h4>
             <div className="relative rounded-lg overflow-hidden border border-neutral-800 bg-neutral-950/60 shadow-md select-none">
@@ -823,7 +806,7 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
                 alt="오시는 길 약도"
                 draggable={false}
                 onDragStart={(e) => e.preventDefault()}
-                className="w-full h-36 sm:h-44 object-cover filter contrast-105 select-none pointer-events-none"
+                className="w-full h-28 sm:h-36 md:h-44 object-cover filter contrast-105 select-none pointer-events-none"
               />
               <button
                 type="button"
@@ -836,14 +819,14 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}
-                className="absolute bottom-1.5 right-2 flex items-center gap-1.5 text-[11px] font-serif-kr text-neutral-200 bg-neutral-900/90 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 px-2.5 py-1 rounded shadow-md backdrop-blur-xs transition-all cursor-pointer pointer-events-auto active:scale-95"
+                className="absolute bottom-1 sm:bottom-1.5 right-1.5 sm:right-2 flex items-center gap-1 sm:gap-1.5 text-[9px] sm:text-[11px] font-serif-kr text-neutral-200 bg-neutral-900/90 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 px-2 py-0.5 sm:py-1 rounded shadow-md backdrop-blur-xs transition-all cursor-pointer pointer-events-auto active:scale-95"
                 title="약도 확대보기"
               >
                 <span>확대보기</span>
-                <Maximize2 className="w-3 h-3 text-neutral-400" />
+                <Maximize2 className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-neutral-400" />
               </button>
             </div>
-            <p className="text-[11px] text-neutral-400 font-serif-kr">
+            <p className="text-[10px] sm:text-[11px] text-neutral-400 font-serif-kr truncate">
               서울특별시 용산구 이태원동 ○△□-△○
             </p>
           </div>
@@ -854,31 +837,31 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
       // Page 04: 식사 메뉴 (Part 1 - 다이닝 & 타파스 메뉴 리스트)
       const diningItems = MENU_ITEMS.filter((item) => item.category === 'Tapas & Dining');
       return (
-        <div className="space-y-4">
+        <div className="space-y-2.5 sm:space-y-4">
           <div>
-            <span className="text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
+            <span className="text-[10px] sm:text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
               Main Dining
             </span>
-            <h3 className="text-xl sm:text-2xl font-serif-kr font-semibold text-neutral-100">
+            <h3 className="text-sm sm:text-xl md:text-2xl font-serif-kr font-semibold text-neutral-100">
               식사 메뉴
             </h3>
           </div>
 
-          <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+          <div className="space-y-1.5 sm:space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
             {diningItems.map((item, idx) => (
               <div
                 key={idx}
-                className="p-3 rounded-lg border bg-neutral-900/60 border-neutral-800"
+                className="p-2 sm:p-3 rounded-lg border bg-neutral-900/60 border-neutral-800"
               >
-                <div className="flex justify-between items-baseline">
-                  <h4 className="font-serif-kr text-sm font-semibold text-neutral-100">{item.name}</h4>
-                  <span className="text-xs font-mono text-neutral-300 tabular-nums">{item.price}</span>
+                <div className="flex justify-between items-baseline gap-1">
+                  <h4 className="font-serif-kr text-xs sm:text-sm font-semibold text-neutral-100 truncate">{item.name}</h4>
+                  <span className="text-[10px] sm:text-xs font-mono text-neutral-300 tabular-nums shrink-0">{item.price}</span>
                 </div>
-                <div className="text-[11px] text-neutral-400 font-serif-kr mt-0.5">{item.subName}</div>
-                <p className="text-xs text-neutral-300 mt-1 font-serif-kr leading-relaxed line-clamp-2">
+                <div className="text-[10px] sm:text-[11px] text-neutral-400 font-serif-kr mt-0.5 truncate">{item.subName}</div>
+                <p className="text-[10px] sm:text-xs text-neutral-300 mt-1 font-serif-kr leading-relaxed line-clamp-2">
                   {item.description}
                 </p>
-                <div className="mt-1.5 text-[10px] text-neutral-400 flex items-center justify-between">
+                <div className="mt-1 text-[9px] sm:text-[10px] text-neutral-400 flex items-center justify-between">
                   <span>주의: {item.recommendedHost}</span>
                 </div>
               </div>
@@ -891,40 +874,40 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
       // Page 06: 식사 메뉴 (Part 2 - 커피 & 디저트)
       const sweetItems = MENU_ITEMS.filter((item) => item.category === 'Coffee & Tea' || item.category === 'Dessert');
       return (
-        <div className="space-y-4">
+        <div className="space-y-2.5 sm:space-y-4">
           <div>
-            <span className="text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
+            <span className="text-[10px] sm:text-xs uppercase tracking-widest text-neutral-400 font-cinzel">
               Tea & Coffee
             </span>
-            <h3 className="text-xl sm:text-2xl font-serif-kr font-semibold text-neutral-100">
+            <h3 className="text-sm sm:text-xl md:text-2xl font-serif-kr font-semibold text-neutral-100">
               차 & 커피
             </h3>
           </div>
 
-          <div className="space-y-2.5">
+          <div className="space-y-1.5 sm:space-y-2.5">
             {sweetItems.map((item, idx) => (
               <div
                 key={idx}
-                className="p-3 rounded-lg border bg-neutral-900/60 border-neutral-800"
+                className="p-2 sm:p-3 rounded-lg border bg-neutral-900/60 border-neutral-800"
               >
-                <div className="flex justify-between items-baseline">
-                  <h4 className="font-serif-kr text-sm font-semibold text-neutral-100">{item.name}</h4>
-                  <span className="text-xs font-mono text-neutral-300 tabular-nums">{item.price}</span>
+                <div className="flex justify-between items-baseline gap-1">
+                  <h4 className="font-serif-kr text-xs sm:text-sm font-semibold text-neutral-100 truncate">{item.name}</h4>
+                  <span className="text-[10px] sm:text-xs font-mono text-neutral-300 tabular-nums shrink-0">{item.price}</span>
                 </div>
-                <div className="text-[11px] text-neutral-400 font-serif-kr mt-0.5">{item.subName}</div>
-                <p className="text-xs text-neutral-300 mt-1 font-serif-kr leading-relaxed line-clamp-2">
+                <div className="text-[10px] sm:text-[11px] text-neutral-400 font-serif-kr mt-0.5 truncate">{item.subName}</div>
+                <p className="text-[10px] sm:text-xs text-neutral-300 mt-1 font-serif-kr leading-relaxed line-clamp-2">
                   {item.description}
                 </p>
-                <div className="mt-1.5 text-[10px] text-neutral-400 flex items-center justify-between">
+                <div className="mt-1 text-[9px] sm:text-[10px] text-neutral-400 flex items-center justify-between">
                   <span>주의: {item.recommendedHost}</span>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="p-3 bg-neutral-900 border border-neutral-800 rounded-lg text-xs font-serif-kr text-neutral-300 leading-relaxed">
-            <span className="text-neutral-200 font-semibold">찾으시는 메뉴가 있나요?</span>
-            <p className="text-[11px] text-neutral-400 mt-1 leading-relaxed">
+          <div className="p-2 sm:p-3 bg-neutral-900 border border-neutral-800 rounded-lg text-xs font-serif-kr text-neutral-300 leading-relaxed">
+            <span className="text-[11px] sm:text-xs text-neutral-200 font-semibold">찾으시는 메뉴가 있나요?</span>
+            <p className="text-[10px] sm:text-[11px] text-neutral-400 mt-0.5 leading-relaxed">
               메뉴판에 없는 음료도 많으니 호스트에게 문의하세요!
             </p>
           </div>
@@ -953,19 +936,19 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
       ];
 
       return (
-        <div className="space-y-3.5 sm:space-y-4">
+        <div className="space-y-2 sm:space-y-3.5">
           <div>
-            <span className="text-[11px] uppercase tracking-widest text-neutral-400 font-cinzel">
+            <span className="text-[9px] sm:text-[11px] uppercase tracking-widest text-neutral-400 font-cinzel">
               Host Roster
             </span>
-            <h3 className="text-lg sm:text-xl font-serif-kr font-semibold text-neutral-100 mt-0.5">
+            <h3 className="text-sm sm:text-lg md:text-xl font-serif-kr font-semibold text-neutral-100 mt-0.5">
               호스트 메뉴
             </h3>
           </div>
 
-          <div className="space-y-2.5 sm:space-y-3">
+          <div className="space-y-1.5 sm:space-y-2.5">
             {hostRosterRows.map((row, rowIdx) => (
-              <div key={rowIdx} className="grid grid-cols-2 gap-2 sm:gap-3">
+              <div key={rowIdx} className="grid grid-cols-2 gap-2">
                 {row.map((host, hIdx) => (
                   <button
                     key={hIdx}
@@ -976,15 +959,15 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
                     }}
                     onMouseDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
-                    className="flex items-center justify-between p-2 sm:p-2.5 rounded-lg bg-neutral-900/70 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 transition-all cursor-pointer group text-left shadow-sm active:scale-[0.98]"
+                    className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 transition-all cursor-pointer group text-left shadow-sm active:scale-[0.98]"
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
                       <img
                         src={host.img}
                         alt={host.name}
                         draggable={false}
                         onDragStart={(e) => e.preventDefault()}
-                        className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover select-none pointer-events-none border border-neutral-700/80 group-hover:border-neutral-400 shrink-0 shadow-sm transition-colors"
+                        className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover select-none pointer-events-none border border-neutral-700/80 group-hover:border-neutral-400 shrink-0 shadow-sm transition-colors"
                       />
                       <div className="min-w-0">
                         <span className="font-serif-kr text-xs sm:text-sm font-semibold text-neutral-100 group-hover:text-white block truncate">
@@ -1006,275 +989,19 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
     }
     if (spreadIdx === 4) {
       // Page 10: 호스트 글래스 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {GLASS_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {GLASS_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={yup00Img}
-                alt="글래스 (여미진)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {GLASS_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {GLASS_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {GLASS_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(GLASS_PAGE_DETAIL, yup00Img);
     }
     if (spreadIdx === 5) {
       // Page 12: 호스트 캐럿 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {CARROT_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {CARROT_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={lep00Img}
-                alt="캐럿 (이연아)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {CARROT_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {CARROT_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {CARROT_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(CARROT_PAGE_DETAIL, lep00Img);
     }
     if (spreadIdx === 6) {
       // Page 14: 호스트 인디고 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {INDIGO_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {INDIGO_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={gop00Img}
-                alt="인디고 (고석진)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {INDIGO_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {INDIGO_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {INDIGO_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(INDIGO_PAGE_DETAIL, gop00Img);
     }
     if (spreadIdx === 7) {
       // Page 16: 호스트 리오 상세 정보
-      return (
-        <div className="h-full flex flex-col justify-between space-y-3">
-          {/* Top-most: Nickname & Real Name (Left-aligned at top) */}
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h3 className="text-2xl sm:text-3xl font-serif-kr font-bold text-neutral-100 tracking-wide">
-              {RIO_PAGE_DETAIL.nickname}
-            </h3>
-            <span className="text-xs sm:text-sm font-serif-kr text-neutral-400/80">
-              {RIO_PAGE_DETAIL.realName}
-            </span>
-          </div>
-
-          {/* Side-by-side Section: Image & 12 Body Specs Table (Completely Unified Height) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch flex-1 min-h-0">
-            {/* Left: Host Image (Identical height to spec table) */}
-            <div className="relative rounded-lg overflow-hidden border border-neutral-700/80 bg-neutral-950 shadow-md h-full flex items-center justify-center">
-              <img
-                src={hop00Img}
-                alt="리오 (이호승)"
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                className="w-full h-full object-cover select-none pointer-events-none"
-              />
-            </div>
-
-            {/* Right: 12 Body Specs Table (Height completely unified with image, zero empty space under shoe size) */}
-            <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 h-full flex flex-col justify-between min-h-0">
-              <div className="h-full flex flex-col justify-between divide-y divide-neutral-800/60 font-serif-kr">
-                {RIO_PAGE_DETAIL.bodySpecs.map((spec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs sm:text-[12px] flex-1 py-0.5"
-                  >
-                    <span className="text-neutral-400">{spec.label}</span>
-                    <span className="text-neutral-200 font-mono font-medium">{spec.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Middle Section: Full-width Box for 나이, 성격, 호불호, 애교 서비스 */}
-          <div className="w-full rounded-lg border border-neutral-700/80 bg-neutral-900/60 shadow-md p-2.5 sm:p-3 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:text-[12px] font-serif-kr">
-              {RIO_PAGE_DETAIL.profileDetails.map((detail, idx) => (
-                <div key={idx} className="flex items-start gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-400 shrink-0 min-w-[58px]">
-                    {detail.label}
-                  </span>
-                  <span className="text-neutral-200 leading-snug break-keep text-[11.5px] sm:text-xs">
-                    {detail.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bottom Center: Host Quote */}
-          <div className="pt-2 pb-0.5 text-center border-t border-neutral-800/70 shrink-0">
-            <p className="text-sm sm:text-base font-serif-kr text-neutral-200 italic tracking-wide">
-              {RIO_PAGE_DETAIL.quote}
-            </p>
-          </div>
-        </div>
-      );
+      return renderHostDetailPage(RIO_PAGE_DETAIL, hop00Img);
     }
     if (spreadIdx === 8) {
       // Page 18: 중앙 로고 (메뉴북 최종 18페이지)
@@ -1401,8 +1128,31 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
             </div>
           </div>
 
-          {/* Controls: Play / Pause / Stop & Volume HUD */}
-          <div className="flex items-center gap-3">
+          {/* Controls: Zoom Mode Toggle + Play / Pause / Stop & Volume HUD */}
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
+            {/* Zoom Mode Toggle Button */}
+            <button
+              onClick={() => setZoomMode((z) => (z === 'fit' ? 'full' : 'fit'))}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-serif-kr rounded-lg border transition-all shadow-sm active:scale-95 cursor-pointer ${
+                zoomMode === 'full'
+                  ? 'bg-neutral-800 text-white border-neutral-600'
+                  : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:text-white hover:border-neutral-700'
+              }`}
+              title={zoomMode === 'fit' ? '100% 원본 크기로 확대' : '화면에 맞춰 전체 보기'}
+            >
+              {zoomMode === 'fit' ? (
+                <>
+                  <ZoomIn className="w-3.5 h-3.5 text-neutral-300" />
+                  <span>100% 확대</span>
+                </>
+              ) : (
+                <>
+                  <ZoomOut className="w-3.5 h-3.5 text-neutral-300" />
+                  <span>화면 맞춤</span>
+                </>
+              )}
+            </button>
+
             {/* Play, Pause, Stop Buttons */}
             <div className="flex items-center gap-1 bg-neutral-950 p-1 rounded-lg border border-neutral-800">
               <button
@@ -1433,7 +1183,7 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
             </div>
 
             {/* Volume Control Slider */}
-            <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 rounded-lg border border-neutral-800 text-xs">
+            <div className="flex items-center gap-2 bg-neutral-950 px-2.5 py-1.5 rounded-lg border border-neutral-800 text-xs">
               <button
                 onClick={handleToggleMute}
                 title={isMuted ? '음소거 해제' : '음소거'}
@@ -1454,144 +1204,178 @@ export const MainBookView: React.FC<MainBookViewProps> = ({
                 step="0.01"
                 value={isMuted ? 0 : volume}
                 onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                className="w-20 sm:w-28 h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-neutral-200"
+                className="w-16 sm:w-24 h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-neutral-200"
               />
-              <span className="font-mono text-[10px] text-neutral-400 w-8 tabular-nums text-right">
+              <span className="font-mono text-[10px] text-neutral-400 w-7 tabular-nums text-right">
                 {isMuted ? '0%' : `${Math.round(volume * 100)}%`}
               </span>
             </div>
           </div>
         </div>
 
-        {/* 3D Perspective Book Wrapper */}
+        {zoomMode === 'full' && (
+          <div className="mb-2 text-[11px] font-serif-kr text-neutral-400 bg-neutral-900/90 px-3 py-1 rounded-full border border-neutral-800 flex items-center gap-2 shadow-sm">
+            <span>↔ 좌우로 스크롤하여 확대된 페이지를 볼 수 있습니다. (더블 탭 시 맞춤 보기로 전환)</span>
+            <button
+              onClick={() => setZoomMode('fit')}
+              className="text-neutral-200 underline hover:text-white font-medium ml-1"
+            >
+              [화면 맞춤]
+            </button>
+          </div>
+        )}
+
+        {/* 3D Perspective Book Scaled Canvas Container (Strict Proportional Layout) */}
         <div
-          ref={bookContainerRef}
-          className="relative w-full max-w-[1340px] min-h-[580px] lg:min-h-[640px] xl:min-h-[680px] bg-[#141418] rounded-xl border border-neutral-800 book-shadow flex flex-col lg:flex-row overflow-hidden perspective-1500"
-          onMouseDown={(e) => handleDragStart(e.clientX)}
-          onTouchStart={(e) => {
-            if (e.touches.length > 0) handleDragStart(e.touches[0].clientX);
-          }}
-          style={{
-            cursor: isDragging ? 'grabbing' : 'grab',
-          }}
+          className="w-full flex justify-center items-center overflow-x-auto py-1 scrollbar-none"
+          style={{ WebkitOverflowScrolling: 'touch' }}
         >
-          {/* UNDERLYING LEFT PAGE BASE */}
-          <div className="relative flex-1 p-5 sm:p-7 md:p-9 bg-[#141418] flex flex-col justify-between book-spine-shadow-right overflow-y-auto max-h-[680px]">
-            <div className="flex items-center justify-between text-[11px] font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-4">
-              <span className="tracking-widest">BUNNY CAFE</span>
-              <span>PAGE {String(leftBaseSpread * 2 + 1).padStart(2, '0')}</span>
-            </div>
-
-            <div className="flex-1">{renderLeftPageContent(leftBaseSpread)}</div>
-
-            {/* Dynamic cast shadow from backward turning page */}
-            {isTurningPrev && (
-              <div
-                className="absolute inset-0 pointer-events-none bg-gradient-to-l from-black/85 via-black/40 to-transparent z-20"
-                style={{ opacity: Math.max(0, 1 - flipProgress * 1.5) * 0.7 }}
-              />
-            )}
-          </div>
-
-          {/* UNDERLYING RIGHT PAGE BASE */}
-          <div className="relative flex-1 p-5 sm:p-7 md:p-9 bg-[#141418] flex flex-col justify-between book-spine-shadow overflow-y-auto max-h-[680px]">
-            <div className="flex items-center justify-between text-[11px] font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-4">
-              <span>{rightBaseSpread === 8 ? 'BUNNY CAFE' : rightBaseSpread >= 3 ? 'HOST MENU' : 'MENU'}</span>
-              <span className="tracking-widest">PAGE {String(rightBaseSpread * 2 + 2).padStart(2, '0')}</span>
-            </div>
-
-            <div className="flex-1 flex flex-col min-h-0">{renderRightPageContent(rightBaseSpread)}</div>
-
-            {/* Dynamic cast shadow on the revealing right page */}
-            {isTurningNext && (
-              <div
-                className="absolute inset-0 pointer-events-none bg-gradient-to-r from-black/85 via-black/40 to-transparent z-20"
-                style={{ opacity: Math.max(0, 1 + flipProgress * 1.5) * 0.7 }}
-              />
-            )}
-          </div>
-
-          {/* ACTIVE 3D TURNING PAGE LEAF (TURNING FORWARD TO NEXT PAGE) */}
-          {isTurningNext && currentSpread < totalSpreads - 1 && (
+          <div
+            className="relative shrink-0 transition-transform duration-200 ease-out"
+            style={{
+              width: `${BASE_WIDTH * activeScale}px`,
+              height: `${BASE_HEIGHT * activeScale}px`,
+            }}
+            onClick={handleDoubleTap}
+          >
             <div
-              className="hidden lg:block absolute top-0 bottom-0 left-1/2 w-1/2 transform-style-3d origin-left pointer-events-none z-30"
+              ref={bookContainerRef}
+              className="relative bg-[#141418] rounded-xl border border-neutral-800 book-shadow flex flex-row overflow-hidden perspective-1500 select-none touch-pan-y"
               style={{
-                transform: `rotateY(${flipAngle}deg)`,
+                width: `${BASE_WIDTH}px`,
+                height: `${BASE_HEIGHT}px`,
+                transform: `scale(${activeScale})`,
+                transformOrigin: 'top left',
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                cursor: isDragging ? 'grabbing' : 'grab',
               }}
+              onMouseDown={handleMouseDown}
+              onTouchStart={handleTouchStart}
             >
-              {/* Front of Turning Leaf: Current Right Page */}
-              <div className="absolute inset-0 backface-hidden bg-[#141418] border-r border-neutral-800 p-5 sm:p-7 md:p-9 overflow-hidden flex flex-col justify-between shadow-2xl">
-                <div className="flex items-center justify-between text-[11px] font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-4">
-                  <span>{currentSpread === 8 ? 'BUNNY CAFE' : currentSpread >= 3 ? 'HOST MENU' : 'MENU'}</span>
-                  <span className="tracking-widest">PAGE {String(currentSpread * 2 + 2).padStart(2, '0')}</span>
-                </div>
-                <div className="flex-1 overflow-hidden">{renderRightPageContent(currentSpread)}</div>
-                {/* 3D Page Curl Lighting & Shadow */}
-                <div
-                  className="absolute inset-0 bg-gradient-to-l from-black/70 via-black/20 to-transparent pointer-events-none"
-                  style={{ opacity: Math.sin(-flipProgress * Math.PI) * 0.8 }}
-                />
-              </div>
+              {/* Central spine fold vertical shadow line */}
+              <div className="absolute top-0 bottom-0 left-1/2 w-px -ml-[0.5px] bg-black/60 shadow-[0_0_10px_rgba(0,0,0,0.9)] z-20 pointer-events-none" />
 
-              {/* Back of Turning Leaf: Next Left Page (Rotated 180deg) */}
-              <div
-                className="absolute inset-0 backface-hidden bg-[#141418] border-l border-neutral-800 p-5 sm:p-7 md:p-9 overflow-hidden flex flex-col justify-between shadow-2xl"
-                style={{ transform: 'rotateY(180deg)' }}
-              >
-                <div className="flex items-center justify-between text-[11px] font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-4">
+              {/* UNDERLYING LEFT PAGE BASE */}
+              <div className="relative w-1/2 p-5 bg-[#141418] flex flex-col justify-between book-spine-shadow-right overflow-hidden">
+                <div className="flex items-center justify-between text-xs font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-3">
                   <span className="tracking-widest">BUNNY CAFE</span>
-                  <span>PAGE {String((currentSpread + 1) * 2 + 1).padStart(2, '0')}</span>
+                  <span className="shrink-0 font-mono">P.{String(leftBaseSpread * 2 + 1).padStart(2, '0')}</span>
                 </div>
-                <div className="flex-1 overflow-hidden">{renderLeftPageContent(currentSpread + 1)}</div>
-                {/* 3D Page Curl Lighting & Shadow */}
-                <div
-                  className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/20 to-transparent pointer-events-none"
-                  style={{ opacity: Math.sin(-flipProgress * Math.PI) * 0.8 }}
-                />
-              </div>
-            </div>
-          )}
 
-          {/* ACTIVE 3D TURNING PAGE LEAF (TURNING BACKWARD TO PREVIOUS PAGE) */}
-          {isTurningPrev && currentSpread > 0 && (
-            <div
-              className="hidden lg:block absolute top-0 bottom-0 right-1/2 w-1/2 transform-style-3d origin-right pointer-events-none z-30"
-              style={{
-                transform: `rotateY(${flipAngle}deg)`,
-              }}
-            >
-              {/* Front of Turning Leaf: Current Left Page */}
-              <div className="absolute inset-0 backface-hidden bg-[#141418] border-l border-neutral-800 p-5 sm:p-7 md:p-9 overflow-hidden flex flex-col justify-between shadow-2xl">
-                <div className="flex items-center justify-between text-[11px] font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-4">
-                  <span className="tracking-widest">BUNNY CAFE</span>
-                  <span>PAGE {String(currentSpread * 2 + 1).padStart(2, '0')}</span>
-                </div>
-                <div className="flex-1 overflow-hidden">{renderLeftPageContent(currentSpread)}</div>
-                {/* 3D Page Curl Lighting & Shadow */}
-                <div
-                  className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/20 to-transparent pointer-events-none"
-                  style={{ opacity: Math.sin(flipProgress * Math.PI) * 0.8 }}
-                />
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">{renderLeftPageContent(leftBaseSpread)}</div>
+
+                {/* Dynamic cast shadow from backward turning page */}
+                {isTurningPrev && (
+                  <div
+                    className="absolute inset-0 pointer-events-none bg-gradient-to-l from-black/85 via-black/40 to-transparent z-20"
+                    style={{ opacity: Math.max(0, 1 - flipProgress * 1.5) * 0.7 }}
+                  />
+                )}
               </div>
 
-              {/* Back of Turning Leaf: Previous Right Page (Rotated 180deg) */}
-              <div
-                className="absolute inset-0 backface-hidden bg-[#141418] border-r border-neutral-800 p-5 sm:p-7 md:p-9 overflow-hidden flex flex-col justify-between shadow-2xl"
-                style={{ transform: 'rotateY(180deg)' }}
-              >
-                <div className="flex items-center justify-between text-[11px] font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-4">
-                  <span>{(currentSpread - 1) === 8 ? 'BUNNY CAFE' : (currentSpread - 1) >= 3 ? 'HOST MENU' : 'MENU'}</span>
-                  <span>PAGE {String((currentSpread - 1) * 2 + 2).padStart(2, '0')}</span>
+              {/* UNDERLYING RIGHT PAGE BASE */}
+              <div className="relative w-1/2 p-5 bg-[#141418] flex flex-col justify-between book-spine-shadow overflow-hidden">
+                <div className="flex items-center justify-between text-xs font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-3">
+                  <span className="tracking-widest">{rightBaseSpread === 8 ? 'BUNNY CAFE' : rightBaseSpread >= 3 ? 'HOST MENU' : 'MENU'}</span>
+                  <span className="shrink-0 font-mono">P.{String(rightBaseSpread * 2 + 2).padStart(2, '0')}</span>
                 </div>
-                <div className="flex-1 overflow-hidden">{renderRightPageContent(currentSpread - 1)}</div>
-                {/* 3D Page Curl Lighting & Shadow */}
-                <div
-                  className="absolute inset-0 bg-gradient-to-l from-black/70 via-black/20 to-transparent pointer-events-none"
-                  style={{ opacity: Math.sin(flipProgress * Math.PI) * 0.8 }}
-                />
+
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">{renderRightPageContent(rightBaseSpread)}</div>
+
+                {/* Dynamic cast shadow on the revealing right page */}
+                {isTurningNext && (
+                  <div
+                    className="absolute inset-0 pointer-events-none bg-gradient-to-r from-black/85 via-black/40 to-transparent z-20"
+                    style={{ opacity: Math.max(0, 1 + flipProgress * 1.5) * 0.7 }}
+                  />
+                )}
               </div>
+
+              {/* ACTIVE 3D TURNING PAGE LEAF (TURNING FORWARD TO NEXT PAGE) */}
+              {isTurningNext && currentSpread < totalSpreads - 1 && (
+                <div
+                  className="absolute top-0 bottom-0 left-1/2 w-1/2 transform-style-3d origin-left pointer-events-none z-30"
+                  style={{
+                    transform: `rotateY(${flipAngle}deg)`,
+                  }}
+                >
+                  {/* Front of Turning Leaf: Current Right Page */}
+                  <div className="absolute inset-0 backface-hidden bg-[#141418] border-r border-neutral-800 p-5 overflow-hidden flex flex-col justify-between shadow-2xl">
+                    <div className="flex items-center justify-between text-xs font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-3">
+                      <span className="tracking-widest">{currentSpread === 8 ? 'BUNNY CAFE' : currentSpread >= 3 ? 'HOST MENU' : 'MENU'}</span>
+                      <span className="shrink-0 font-mono">P.{String(currentSpread * 2 + 2).padStart(2, '0')}</span>
+                    </div>
+                    <div className="flex-1 overflow-hidden">{renderRightPageContent(currentSpread)}</div>
+                    {/* 3D Page Curl Lighting & Shadow */}
+                    <div
+                      className="absolute inset-0 bg-gradient-to-l from-black/70 via-black/20 to-transparent pointer-events-none"
+                      style={{ opacity: Math.sin(-flipProgress * Math.PI) * 0.8 }}
+                    />
+                  </div>
+
+                  {/* Back of Turning Leaf: Next Left Page (Rotated 180deg) */}
+                  <div
+                    className="absolute inset-0 backface-hidden bg-[#141418] border-l border-neutral-800 p-5 overflow-hidden flex flex-col justify-between shadow-2xl"
+                    style={{ transform: 'rotateY(180deg)' }}
+                  >
+                    <div className="flex items-center justify-between text-xs font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-3">
+                      <span className="tracking-widest">BUNNY CAFE</span>
+                      <span className="shrink-0 font-mono">P.{String((currentSpread + 1) * 2 + 1).padStart(2, '0')}</span>
+                    </div>
+                    <div className="flex-1 overflow-hidden">{renderLeftPageContent(currentSpread + 1)}</div>
+                    {/* 3D Page Curl Lighting & Shadow */}
+                    <div
+                      className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/20 to-transparent pointer-events-none"
+                      style={{ opacity: Math.sin(-flipProgress * Math.PI) * 0.8 }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* ACTIVE 3D TURNING PAGE LEAF (TURNING BACKWARD TO PREVIOUS PAGE) */}
+              {isTurningPrev && currentSpread > 0 && (
+                <div
+                  className="absolute top-0 bottom-0 right-1/2 w-1/2 transform-style-3d origin-right pointer-events-none z-30"
+                  style={{
+                    transform: `rotateY(${flipAngle}deg)`,
+                  }}
+                >
+                  {/* Front of Turning Leaf: Current Left Page */}
+                  <div className="absolute inset-0 backface-hidden bg-[#141418] border-l border-neutral-800 p-5 overflow-hidden flex flex-col justify-between shadow-2xl">
+                    <div className="flex items-center justify-between text-xs font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-3">
+                      <span className="tracking-widest">BUNNY CAFE</span>
+                      <span className="shrink-0 font-mono">P.{String(currentSpread * 2 + 1).padStart(2, '0')}</span>
+                    </div>
+                    <div className="flex-1 overflow-hidden">{renderLeftPageContent(currentSpread)}</div>
+                    {/* 3D Page Curl Lighting & Shadow */}
+                    <div
+                      className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/20 to-transparent pointer-events-none"
+                      style={{ opacity: Math.sin(flipProgress * Math.PI) * 0.8 }}
+                    />
+                  </div>
+
+                  {/* Back of Turning Leaf: Previous Right Page (Rotated 180deg) */}
+                  <div
+                    className="absolute inset-0 backface-hidden bg-[#141418] border-r border-neutral-800 p-5 overflow-hidden flex flex-col justify-between shadow-2xl"
+                    style={{ transform: 'rotateY(180deg)' }}
+                  >
+                    <div className="flex items-center justify-between text-xs font-cinzel text-neutral-400 border-b border-neutral-800 pb-2 mb-3">
+                      <span className="tracking-widest">{(currentSpread - 1) === 8 ? 'BUNNY CAFE' : (currentSpread - 1) >= 3 ? 'HOST MENU' : 'MENU'}</span>
+                      <span className="shrink-0 font-mono">P.{String((currentSpread - 1) * 2 + 2).padStart(2, '0')}</span>
+                    </div>
+                    <div className="flex-1 overflow-hidden">{renderRightPageContent(currentSpread - 1)}</div>
+                    {/* 3D Page Curl Lighting & Shadow */}
+                    <div
+                      className="absolute inset-0 bg-gradient-to-l from-black/70 via-black/20 to-transparent pointer-events-none"
+                      style={{ opacity: Math.sin(flipProgress * Math.PI) * 0.8 }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {/* Bottom Pagination Dots & Fast Jump Bar */}
